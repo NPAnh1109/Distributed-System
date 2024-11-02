@@ -374,24 +374,23 @@ class client:
             send_data = f"Port--{self.cur_port}"
             self.cur_port += 1
             s_file_client = threading.Thread(target=self.open_port_thread,
-                                                 args=(self.cur_port-1))
+                                                 args=(self.cur_port-1,))
             s_file_client.start()
             clientConnect.send(send_data.encode("utf-8"))
 
     def open_port_thread(self, port):
         file_soket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        file_soket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        print(self.get_client_host())
+        file_soket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Allow port reuse
         try:
             file_soket.bind((self.get_client_host(), port))
-
+            print(f"Port {port} is binding")
         except:
-            print("Something went wrong")
+            print("Port {port} is binding. Something went wrong")
         file_soket.listen()
-        print(f"The file serving socket is {self.file_soket.getsockname()}")
         while True:
             try:
-                peer_client, peer_client_socket = self.file_soket.accept()
+                peer_client, peer_client_socket = file_soket.accept()
+                print(f"there are 1 connection in port{port}")
                 self.send_chunk_to_client(peer_client, peer_client_socket)
                 break
             except:
@@ -424,6 +423,7 @@ class client:
 
         while True:
             receive_message = self.client_socket.recv(BYTES).decode("utf-8")
+            print(receive_message)
             msg_split = receive_message.split("--")
             cmd = msg_split[1]
             if "Welcome" in cmd:
@@ -469,6 +469,7 @@ class client:
                     list_of_missing = (general_dict.missing_file(self.id))
                     size = len(list_of_missing)
                     chunkIdx = 1
+                    print(f"size: {size}")
                     while size:
                         # Random choose a client to connect
                         # rand_int = random.randint(0, len(peer_info['ip']) - 1)
@@ -485,31 +486,34 @@ class client:
                         new_socket.connect(connect_tuple)
                         new_socket.send(f"Download--{self.id}--{chunkIdx}".encode("utf-8"))  # Send uniqueID--chunkStart
                         msg = new_socket.recv(BYTES).decode("utf-8")
-                        download_port = msg.split("--")[1]
+                        print(f"message after download: {msg}")
+                        download_port = int(msg.split("--")[1])
                         new_socket.close()
 
                         download_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        time.sleep(1)
                         download_socket.connect((connect_tuple[0], download_port))
                         download_socket.send(f"Download--{self.id}--{chunkIdx}".encode("utf-8"))
-                        msg = new_socket.recv(BYTES).decode("utf-8")
+                        msg = download_socket.recv(BYTES).decode("utf-8")
                         print(f"chunk id:{chunkIdx}")
                         for i in range(chunkIdx - 1, int(size)):
-                            path = self.chunk_path + "\\" + f"{self.id}_{chunkIdx}.txt"
-                            text = new_socket.recv(2 * chunksize)
+                            path = self.chunk_path + "/" + f"{self.id}_{chunkIdx}.txt"
+                            print(f"chunk path: {path}")
+                            text = download_socket.recv(2 * chunksize)
                             print(f"self{self.json_path}")
                             print(f"{chunkIdx}:{len(text)}")
                             with open(self.json_path, 'r') as json_file:
                                 file_info = json.load(json_file)
                                 id = int(file_info.get("id"))
                                 sizeofchunk = int(file_info.get(f"{chunkIdx}"))
-                                
+                                print(f"sizeofchunk: {sizeofchunk}")
                             try:
                                 if (len(text) == sizeofchunk):
                                     with open(path, 'wb') as file:
                                         file.write(text)
                                     print(f"Text file '{path}' created successfully.")
                                     self.log.append(f"Text file '{path}' created successfully.")
-                                    new_socket.send(f"OK".encode("utf-8"))
+                                    download_socket.send(f"OK".encode("utf-8"))
                                     # time.sleep(0.1)
                                     file.close()
                                     chunkIdx += 1
@@ -522,7 +526,7 @@ class client:
                             except IOError as e:
                                 print(f"Error: {chunkIdx}")
                                 self.log.append(f"Error: {chunkIdx}")
-                                new_socket.send(f"Fail--{chunkIdx}".encode("utf-8"))
+                                download_socket.send(f"Fail--{chunkIdx}".encode("utf-8"))
 
 
                         with open(self.json_path, 'r') as json_file:
@@ -536,7 +540,7 @@ class client:
                             general_dict.add_chunks_from_dir(self.chunk_path, id)
                             general_dict.merge_chunks(id, self.download_path)
                             # Close connection
-                            new_socket.close()
+                            download_socket.close()
                             break
 
                         if chunkIdx < total:
@@ -551,7 +555,7 @@ class client:
                                     if file.startswith(f"{self.id}_"):
                                         os.remove(os.path.join(self.chunk_path, file))
                                 # Close connection
-                                new_socket.close()
+                                download_socket.close()
                                 break
 
                     print("Finished")
@@ -627,6 +631,7 @@ class client:
                 self.ping_client((self.temp_connection_list[0], LOCAL_PORT))
                 self.temp_connection_list.pop(0)
             self.ping_message_to_server()
+            #sleep()
 
     def stop_connect_to_server(self):
         self.client_socket.close()
