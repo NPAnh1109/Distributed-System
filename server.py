@@ -1,11 +1,12 @@
 import socket
-# import time
+import time
 import threading
 from tkinter import filedialog, messagebox, ttk
 import tkinter as tk
 import re
 
 BYTES = 102400
+TIME_THRESHOLD = 10
 
 
 class tracking_server:
@@ -28,6 +29,8 @@ class tracking_server:
         # Init other properties
         self.client_servers = {}  # Key: peerIP - Value: port
         self.file_client = {}  # Key: fileName - Value: list of peers
+        self.time_last = {} # Key: peerIP - Value: time
+        self.weight = {}  # Weight is a dict of dict of numbers; Key 1: The sending end; Key 2: the receiving end - Value: Latency
         self.counter = 0
 
     def get_local_ip(self):
@@ -56,19 +59,38 @@ class tracking_server:
 
         return fileList
 
+    def send_disconnect(self, ip, port, remover_ip):
+        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client_socket.connect((ip, port))
+        send_message = f'Update ping--remove--{remover_ip}'.encode("utf-8")
+        client_socket.send(send_message)
+
+    def send_connect(self, ip, port, adder_ip):
+        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client_socket.connect((ip, port))
+        send_message = f'Update ping--add--{adder_ip}'.encode("utf-8")
+        client_socket.send(send_message)
+
     def handle_clients(self, connection, address):
         print(f'[System Announcement] Accept new connection from {address[0]} !')
         self.log.append(f'[System Announcement] Accept new connection from {address[0]} !')
         welcome_message = "[Announcement]--Welcome to P2P File Sharing application !--".encode("utf-8")
         connection.send(welcome_message)
 
+        for i in self.client_servers:
+            self.send_connect(i, self.client_servers[i], clientIP)
+
         # Receive IP and port from client
         init_message = connection.recv(BYTES).decode("utf-8")
         clientIP = address[0]
         clientPort = int(init_message)  # send the FILE_PORT
         self.client_servers[clientIP] = clientPort
+        if clientIP not in self.weight:
+            self.weight[clientIP] = {}  # Key 2: the receiving end
 
         print(self.client_servers)
+
+        self.time_last[clientIP] = time.time()
 
         while True:
             recv_message = connection.recv(BYTES).decode("utf-8")
@@ -76,10 +98,30 @@ class tracking_server:
                 frag_message = recv_message.split(" ")
                 client_cmd = frag_message[0]
                 print(f"Receive: {recv_message}")
+                self.time_last[clientIP] = time.time()
             else:
                 frag_message = ""
                 client_cmd = ""
-            if client_cmd == 'Download':
+            if (client_cmd == 'Disconnect'):   # | (time.time - self.time_last[clientIP] > TIME_THRESHOLD):
+                # Client sent 'Disconnect'
+                self.client_servers.pop(clientIP)
+                file_list = self.get_available_files(clientIP)
+                for file in file_list:
+                    # Remove the clientIP out of the file_client
+                    self.file_client[file].remove(clientIP)
+                    if self.file_client[file].count() == 0:
+                        # Case: no client has this file
+                        self.file_client.pop(file)
+
+                self.log.append(f"[System Announcement] {clientIP}: Disconnect")
+                send_data = "[Disconnect]--Success--".encode("utf-8")
+                connection.send(send_data)
+
+                for i in self.client_servers:
+                    self.send_disconnect(i, self.client_servers[i], clientIP)
+                break
+
+            elif client_cmd == 'Download':
                 # Client sent 'Download'
                 magnet_text = int(frag_message[1])
                 if magnet_text in self.file_client:
@@ -96,6 +138,7 @@ class tracking_server:
                     peers_info['ip'] = clients_ip
                     peers_info['port'] = ports
 
+                    # TODO: LOOK INTO THIS AGAIN
                     send_data = f"[Announcement]--Download Successfully--{magnet_text}--"  # Split by --
                     send_data += f"{peers_info}"
 
@@ -116,35 +159,65 @@ class tracking_server:
                 self.log.append(f"[System Announcement] {clientIP}: Upload")
                 connection.send(send_data.encode("utf-8"))
 
-            elif client_cmd == 'Disconnect':
-                # Client sent 'Disconnect'
-                self.client_servers.pop(clientIP)
-                file_list = self.get_available_files(clientIP)
-                for file in file_list:
-                    # Remove the clientIP out of the file_client
-                    self.file_client[file].remove(clientIP)
-                    if self.file_client[file].count() == 0:
-                        # Case: no client has this file
-                        self.file_client.pop(file)
-
-                self.log.append(f"[System Announcement] {clientIP}: Disconnect")
-                send_data = "[Disconnect]--Success--".encode("utf-8")
-                connection.send(send_data)
-                break
-
             elif client_cmd == 'Waiting':
                 # Client did not send any massage -> refers to '\0'
                 send_data = f'[Announcement]--Waiting--'.encode("utf-8")
                 connection.send(send_data)
 
+            elif client_cmd == 'Update':
+                # Loop through each fragment in frag_message
+                for i in range(0, len(frag_message)):
+                    # Split the current fragment by '--' to separate IP and latency
+                    cur_ip_latency = frag_message[i].split("--")
+
+                    # Ensure we have two parts (IP and latency) after the split
+                    if len(cur_ip_latency) == 2:
+                        ip = cur_ip_latency[0]  # IP address
+                        latency = cur_ip_latency[1]  # Latency value
+
+                        # Update the weight for the client IP with the parsed latency
+                        self.weight[clientIP][ip] = latency
+                    else:
+                        print(f"Invalid message format in fragment: {frag_message[i]}")
+
             else:
                 send_message = f'[Failure]--Invalid Format--'.encode("utf-8")
                 connection.send(send_message)
+
+    def get_dijkstra(self, start, end):
+        average_weights = self.get_average_weights()
+
+    def get_average_weights(self):
+        # Create a new dictionary to store the averaged weights
+        average_weights = {}
+
+        # Iterate over each sending end
+        for sender in self.weight:
+            # Ensure the sender exists in the average weights dictionary
+            if sender not in average_weights:
+                average_weights[sender] = {}
+
+            # Iterate over each receiving end
+            for receiver in self.weight[sender]:
+                # Check if the reverse (receiver to sender) exists
+                if receiver in self.weight and sender in self.weight[receiver]:
+                    # Calculate the average of both directions
+                    avg_weight = (float(self.weight[sender][receiver]) + float(self.weight[receiver][sender])) / 2
+                else:
+                    # If only one direction exists, use that weight
+                    avg_weight = float(self.weight[sender][receiver])
+
+                # Store the average weight in the result dictionary
+                average_weights[sender][receiver] = avg_weight
+
+        # Return the dictionary with averaged weights
+        return average_weights
 
     def start_server(self):
         while True:
             try:
                 clientSocket, clientAddress = self.server_socket.accept()
+                print(f"Accept connection from {clientAddress}")
                 clientCommand = threading.Thread(target=self.handle_clients(clientSocket, clientAddress))
                 clientCommand.start()
             except:
