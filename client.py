@@ -247,7 +247,6 @@ class client:
         self.chunk_path = ""
         self.id = -1
         self.status = 0
-
     def get_local_ip(self):
         try:
             # Create a socket object and connect to an external server
@@ -407,7 +406,6 @@ class client:
                         new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
                         new_socket.connect(connect_tuple)
-
                         new_socket.send(f"{self.id}--{chunkIdx}".encode("utf-8"))  # Send uniqueID--chunkStart
                         size = new_socket.recv(BYTES).decode("utf-8")
                         print(f"chunk id:{chunkIdx}")
@@ -422,7 +420,6 @@ class client:
                                 # print(f"{chunkIdx}size: {file_info.get(f"{chunkIdx}")}")
                                 # if(chunkIdx >= size)
                                 sizeofchunk = int(file_info.get(f"{chunkIdx}"))
-
                             try:
                                 if (len(text) == sizeofchunk):
                                     with open(path, 'wb') as file:
@@ -601,7 +598,6 @@ class ClientApp(tk.Tk):
         ttk.Button(self, text="Download Selected", command=self.download_file).grid(row=7, column=2, padx=10, pady=5)
 
         ttk.Button(self, text="Refresh List", command=self.fetch_logs).grid(row=8, column=0, padx=10, pady=5)
-
     def browse_json_file(self):
         filename = filedialog.askopenfilename(initialdir="/", title="Select a JSON file",
                                               filetypes=(("JSON files", "*.json"), ("All files", "*.*")))
@@ -723,7 +719,6 @@ if __name__ == '__main__':
     # new_client.chunk_path = r"D:\232_semester\CN\New folder\testing_data\chunks"
     # new_client.json_path = r"D:\232_semester\CN\New folder\testing_data\Upload\Horus.pdf.json"
     # new_client.set_server_host("192.168.0.105")
-
     # with open(new_client.json_path, 'r') as json_file:
     #         file_info = json.load(json_file)
     #         id = int(file_info.get("id"))

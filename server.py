@@ -533,8 +533,95 @@ class LogTab(ttk.Frame):
         for entry in logs:
             self.log_text.insert(tk.END, f"{entry}\n")
 
+class ConfigTab(ttk.Frame):
+    def __init__(self, parent: MainApplication) -> None:
+        super().__init__(parent)
+        self.parent = parent
+        self.create_widgets()
+
+    def create_widgets(self) -> None:
+        self.connection_details_frame = MainViewConfigTabConnectionDetails(self)
+        self.connection_details_frame.pack(fill="x", padx=10, pady=10)
+
+class MainViewConfigTabConnectionDetails(ttk.Frame):
+    def __init__(self, parent: ConfigTab) -> None:
+        print("Initializing MainViewSettingsTabConnectionDetails")
+
+        super().__init__(parent)
+        self.parent = parent
+        self.create_widgets()
+
+    def create_widgets(self) -> None:
+        print("Creating widgets for MainViewSettingsTabConnectionDetails")
+
+        ttk.Label(self, text="SERVER INFORMATION", font=("Helvetica", 18, "bold")).grid(row=0, columnspan=2, pady=10)
+
+        ### SERVER IP Entry ###
+        ttk.Label(self, text="Server IP address").grid(row=2, column=0)
+        self.server_ip_entry = ttk.Entry(self)
+        self.server_ip_entry.grid(row=2, column=1, padx=4, pady=6)
+        self.server_ip_entry.insert(0, self.parent.parent.server.get_server_ip())
+        self.server_ip_entry.configure(state="readonly")
+        
+class ShortestPathEstimation():
+	def __init__(self, vertices):
+		self.V = vertices
+		self.graph = [[0 for column in range(vertices)]
+					for row in range(vertices)]
+
+	# def printSolution(self, dist):
+	# 	print("Vertex \t Distance from Source")
+	# 	for node in range(self.V):
+	# 		print(node, "\t\t", dist[node])
+
+	def minDistance(self, dist, sptSet):
+		min = 1e7
+		for v in range(self.V):
+			if dist[v] < min and sptSet[v] == False:
+				min = dist[v]
+				min_index = v
+
+		return min_index
+
+	def dijkstra(self, src):
+
+		dist = [1e7] * self.V
+		dist[src] = 0
+		sptSet = [False] * self.V
+
+		for _ in range(self.V):
+			u = self.minDistance(dist, sptSet)
+			sptSet[u] = True
+
+			for v in range(self.V):
+				if (self.graph[u][v] > 0 and
+				sptSet[v] == False and
+				dist[v] > dist[u] + self.graph[u][v]):
+					dist[v] = dist[u] + self.graph[u][v]
+
+		# self.printSolution(dist)
+
+# g = ShortestPathEstimation(numNodes)
+# g = ShortestPathEstimation(9)
+# g.graph = [[0, 4, 0, 0, 0, 0, 0, 8, 0], # based on the ping list
+# 		[4, 0, 8, 0, 0, 0, 0, 11, 0],
+# 		[0, 8, 0, 7, 0, 4, 0, 0, 2],
+# 		[0, 0, 7, 0, 9, 14, 0, 0, 0],
+# 		[0, 0, 0, 9, 0, 10, 0, 0, 0],
+# 		[0, 0, 4, 14, 10, 0, 2, 0, 0],
+# 		[0, 0, 0, 0, 0, 2, 0, 1, 6],
+# 		[8, 11, 0, 0, 0, 0, 1, 0, 7],
+# 		[0, 0, 2, 0, 0, 0, 6, 7, 0]
+# 		]
+
+# for s in range(Sources):
+#     g.dijkstra(s)
+# g.dijkstra(0)
 
 if __name__ == "__main__":
-    # Create and run the main application
+    
     app = MainApplication()
+
+    # sv_ttk.use_light_theme()
+
     app.mainloop()
