@@ -64,148 +64,127 @@ class tracking_server:
         client_socket.connect((ip, port))
         send_message = f'Update ping--remove--{remover_ip}'.encode("utf-8")
         client_socket.send(send_message)
+        client_socket.close()
 
     def send_connect(self, ip, port, adder_ip):
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client_socket.connect((ip, port))
         send_message = f'Update ping--add--{adder_ip}'.encode("utf-8")
         client_socket.send(send_message)
+        client_socket.close()
 
     def handle_clients(self, connection, address):
-        print(f'[System Announcement] Accept new connection from {address[0]} !')
-        self.log.append(f'[System Announcement] Accept new connection from {address[0]} !')
-        welcome_message = "[Announcement]--Welcome to P2P File Sharing application !--".encode("utf-8")
-        connection.send(welcome_message)
-
-        # Receive IP and port from client
-        init_message = connection.recv(BYTES).decode("utf-8")
+        recv_message = connection.recv(BYTES).decode("utf-8")
         clientIP = address[0]
-        clientPort = int(init_message)  # send the FILE_PORT
+        new_flag = False
+        if recv_message != "":
+            frag_message = recv_message.split(" ")
+            client_cmd = frag_message[0]
+            print(f"Receive: {recv_message}")
+            self.time_last[clientIP] = time.time()
+        else:
+            frag_message = ""
+            client_cmd = ""
+        if(client_cmd == 'Welcome'):
+            print(f'[System Announcement] Accept new connection from {address[0]} !')
+            self.log.append(f'[System Announcement] Accept new connection from {address[0]} !')
+            welcome_message = "[Announcement]--Welcome to P2P File Sharing application !--".encode("utf-8")
+            connection.send(welcome_message)
+            # Receive IP and port from client
+            self.client_servers[clientIP] = 35255
+            if clientIP not in self.weight:
+                self.weight[clientIP] = {}  # Key 2: the receiving end
+            print(self.client_servers)
+            self.time_last[clientIP] = time.time()
+            new_flag = True
 
-        for i in self.client_servers:
-            self.send_connect(i, self.client_servers[i], clientIP)
-            self.send_connect(clientIP, clientPort, i)
+        elif (client_cmd == 'Disconnect'):
+            # Client sent 'Disconnect'
+            self.client_servers.pop(clientIP)
+            file_list = self.get_available_files(clientIP)
+            for file in file_list:
+                # Remove the clientIP out of the file_client
+                self.file_client[file].remove(clientIP)
+                if self.file_client[file].count() == 0:
+                    # Case: no client has this file
+                    self.file_client.pop(file)
 
-        self.client_servers[clientIP] = clientPort
-        if clientIP not in self.weight:
-            self.weight[clientIP] = {}  # Key 2: the receiving end
+            self.log.append(f"[System Announcement] {clientIP}: Disconnect")
+            send_data = "[Disconnect]--Success--".encode("utf-8")
+            connection.send(send_data)
 
-        print(self.client_servers)
+            for i in self.client_servers:
+                self.send_disconnect(i, self.client_servers[i], clientIP)
 
-        self.time_last[clientIP] = time.time()
+        elif client_cmd == 'Download':
+            # Client sent 'Download'
+            magnet_text = int(frag_message[1])
+            if magnet_text in self.file_client:
+                # Process peers dictionary
+                print(f"Hello: {self.file_client}")
+                print(f"Client_Port: {self.client_servers}")
+                peers_info = {}
+                clients_ip = self.file_client[magnet_text]
+                ports = []
+                for client in clients_ip:
+                    ports.append(self.client_servers[client])
+                peers_info['ip'] = clients_ip
+                peers_info['port'] = ports
+                # TODO: LOOK INTO THIS AGAIN
+                send_data = f"[Announcement]--Download Successfully--{magnet_text}--"  # Split by --
+                send_data += f"{peers_info}"
 
-        while True:
-            try:
-                recv_message = connection.recv(BYTES).decode("utf-8")
-                if recv_message != "":
-                    frag_message = recv_message.split(" ")
-                    client_cmd = frag_message[0]
-                    print(f"Receive: {recv_message}")
-                    self.time_last[clientIP] = time.time()
+                self.file_client[magnet_text].append(clientIP)  # Append new IP
+            else:
+                send_data = f"[Failure]--Download Failed--No File Found--"
+
+            self.log.append(f"[System Announcement] {clientIP}: Download")
+            connection.send(send_data.encode("utf-8"))
+
+        elif client_cmd == 'Upload':
+            # Send a unique ID
+            print("Upload successfully")
+            send_data = f"[Announcement]--Upload Successfully--{self.counter}"
+            self.file_client[self.counter] = []
+            self.file_client[self.counter].append(clientIP)
+            self.counter += 1
+            self.log.append(f"[System Announcement] {clientIP}: Upload")
+            connection.send(send_data.encode("utf-8"))
+
+        elif client_cmd == 'Update':
+            # Loop through each fragment in frag_message
+            for i in range(0, len(frag_message)):
+                # Split the current fragment by '--' to separate IP and latency
+                cur_ip_latency = frag_message[i].split("--")
+                send_data = "Done"
+                connection.send(send_data.encode("utf-8"))
+                # Ensure we have two parts (IP and latency) after the split
+                if len(cur_ip_latency) == 2:
+                    ip = cur_ip_latency[0]  # IP address
+                    latency = cur_ip_latency[1]  # Latency value
+                    # Update the weight for the client IP with the parsed latency
+                    self.weight[clientIP][ip] = latency
                 else:
-                    frag_message = ""
-                    client_cmd = ""
-                if (client_cmd == 'Disconnect'):   # | (time.time - self.time_last[clientIP] > TIME_THRESHOLD):
-                    # Client sent 'Disconnect'
-                    self.client_servers.pop(clientIP)
-                    file_list = self.get_available_files(clientIP)
-                    for file in file_list:
-                        # Remove the clientIP out of the file_client
-                        self.file_client[file].remove(clientIP)
-                        if self.file_client[file].count() == 0:
-                            # Case: no client has this file
-                            self.file_client.pop(file)
+                    print(f"Invalid message format in fragment: {frag_message[i]}")
 
-                    self.log.append(f"[System Announcement] {clientIP}: Disconnect")
-                    send_data = "[Disconnect]--Success--".encode("utf-8")
-                    connection.send(send_data)
-
-                    for i in self.client_servers:
-                        self.send_disconnect(i, self.client_servers[i], clientIP)
-                    break
-
-                elif client_cmd == 'Download':
-                    # Client sent 'Download'
-                    magnet_text = int(frag_message[1])
-                    if magnet_text in self.file_client:
-                        # Process peers dictionary
-                        print(f"Hello: {self.file_client}")
-                        print(f"Client_Port: {self.client_servers}")
-                        peers_info = {}
-                        clients_ip = self.file_client[magnet_text]
-                        ports = []
-                        for client in clients_ip:
-                            ports.append(self.client_servers[client])
-
-                        # peers_info['id'] = f"{clientIP}:{clientPort}"
-                        peers_info['ip'] = clients_ip
-                        peers_info['port'] = ports
-
-                        # TODO: LOOK INTO THIS AGAIN
-                        send_data = f"[Announcement]--Download Successfully--{magnet_text}--"  # Split by --
-                        send_data += f"{peers_info}"
-
-                        self.file_client[magnet_text].append(clientIP)  # Append new IP
-                    else:
-                        send_data = f"[Failure]--Download Failed--No File Found--"
-
-                    self.log.append(f"[System Announcement] {clientIP}: Download")
-                    connection.send(send_data.encode("utf-8"))
-
-                elif client_cmd == 'Upload':
-                    # Send a unique ID
-                    print("Upload successfully")
-                    send_data = f"[Announcement]--Upload Successfully--{self.counter}"
-                    self.file_client[self.counter] = []
-                    self.file_client[self.counter].append(clientIP)
-                    self.counter += 1
-                    self.log.append(f"[System Announcement] {clientIP}: Upload")
-                    connection.send(send_data.encode("utf-8"))
-
-                elif client_cmd == 'Waiting':
-                    # Client did not send any massage -> refers to '\0'
-                    send_data = f'[Announcement]--Waiting--'.encode("utf-8")
-                    connection.send(send_data)
-
-                elif client_cmd == 'Update':
-                    # Loop through each fragment in frag_message
-                    for i in range(0, len(frag_message)):
-                        # Split the current fragment by '--' to separate IP and latency
-                        cur_ip_latency = frag_message[i].split("--")
-
-                        # Ensure we have two parts (IP and latency) after the split
-                        if len(cur_ip_latency) == 2:
-                            ip = cur_ip_latency[0]  # IP address
-                            latency = cur_ip_latency[1]  # Latency value
-
-                            # Update the weight for the client IP with the parsed latency
-                            self.weight[clientIP][ip] = latency
-                        else:
-                            print(f"Invalid message format in fragment: {frag_message[i]}")
-
-                else:
-                    send_message = f'[Failure]--Invalid Format--'.encode("utf-8")
-                    connection.send(send_message)
-            except:
-                pass
+        else:
+            send_message = f'[Failure]--Invalid Format--'.encode("utf-8")
+            connection.send(send_message)
+        if(new_flag):
+            for i in self.client_servers:
+                self.send_connect(i, self.client_servers[i], clientIP)
 
     def get_dijkstra(self, start, end):
         average_weights = self.get_average_weights()
-        shortest_path_estimation = shortest_path_estimation(len(average_weights))
-        shortest_path_estimation.graph = average_weights
-        return shortest_path_estimation.dijkstra(start)[end]
-        # return g[end]
 
     def get_average_weights(self):
         # Create a new dictionary to store the averaged weights
         average_weights = {}
-
         # Iterate over each sending end
         for sender in self.weight:
             # Ensure the sender exists in the average weights dictionary
             if sender not in average_weights:
                 average_weights[sender] = {}
-
             # Iterate over each receiving end
             for receiver in self.weight[sender]:
                 # Check if the reverse (receiver to sender) exists
@@ -215,10 +194,8 @@ class tracking_server:
                 else:
                     # If only one direction exists, use that weight
                     avg_weight = float(self.weight[sender][receiver])
-
                 # Store the average weight in the result dictionary
                 average_weights[sender][receiver] = avg_weight
-
         # Return the dictionary with averaged weights
         return average_weights
 
@@ -227,9 +204,8 @@ class tracking_server:
             try:
                 clientSocket, clientAddress = self.server_socket.accept()
                 print(f"Accept connection from {clientAddress}")
-                clientCommand = threading.Thread(target=self.handle_clients, args=(clientSocket, clientAddress))
+                clientCommand = threading.Thread(target=self.handle_clients(clientSocket, clientAddress))
                 clientCommand.start()
-                print(f"Continue receiving connections")
             except:
                 pass
 
@@ -422,7 +398,6 @@ class HomeTab(ttk.Frame):
         files_window = FileListWindow(self, client_ip, files)
         files_window.grab_set()
 
-
 class FileListWindow(tk.Toplevel):
     def __init__(self, parent, client_ip, files):
         # Initialize the file list window
@@ -446,7 +421,6 @@ class FileListWindow(tk.Toplevel):
 
         self.close_button = ttk.Button(self, text="Close", command=self.destroy)
         self.close_button.pack(side=tk.RIGHT)
-
 
 class SaveFileDialog(tk.Toplevel):
     def __init__(self, parent, file_path):
@@ -493,7 +467,6 @@ class SaveFileDialog(tk.Toplevel):
             messagebox.showerror(
                 "Error", "Please enter a valid file path.", parent=self
             )
-
 
 class LogTab(ttk.Frame):
     def __init__(self, parent):
@@ -573,41 +546,60 @@ class MainViewConfigTabConnectionDetails(ttk.Frame):
         self.server_ip_entry.insert(0, self.parent.parent.server.get_server_ip())
         self.server_ip_entry.configure(state="readonly")
         
-class ShortestPathEstimation:
-    def __init__(self, vertices):
-        self.V = vertices
-        self.graph = [[0    for column in range(vertices)] 
-                            for row in range(vertices)]
+class ShortestPathEstimation():
+	def __init__(self, vertices):
+		self.V = vertices
+		self.graph = [[0 for column in range(vertices)]
+					for row in range(vertices)]
 
-    # def printSolution(self, dist):
-    #     print("Vertex \t Distance from Source")
-    #     for node in range(self.V):
-    #         print(node, "\t\t", dist[node])
+	# def printSolution(self, dist):
+	# 	print("Vertex \t Distance from Source")
+	# 	for node in range(self.V):
+	# 		print(node, "\t\t", dist[node])
 
-    def minDistance(self, dist, sptSet):
-        min_value = 1e7
-        min_index = -1
-        for v in range(self.V):
-            if dist[v] < min_value and sptSet[v] == False:
-                min_value = dist[v]
-                min_index = v
-        return min_index
+	def minDistance(self, dist, sptSet):
+		min = 1e7
+		for v in range(self.V):
+			if dist[v] < min and sptSet[v] == False:
+				min = dist[v]
+				min_index = v
 
-    def dijkstra(self, src):
-        dist = [1e7] * self.V
-        dist[src] = 0
-        sptSet = [False] * self.V
+		return min_index
 
-        for _ in range(self.V):
-            u = self.minDistance(dist, sptSet)
-            sptSet[u] = True
+	def dijkstra(self, src):
 
-            for v in range(self.V):
-                if (self.graph[u][v] > 0 and not sptSet[v] and
-                        dist[v] > dist[u] + self.graph[u][v]):
-                    dist[v] = dist[u] + self.graph[u][v]
+		dist = [1e7] * self.V
+		dist[src] = 0
+		sptSet = [False] * self.V
 
-        return dist
+		for _ in range(self.V):
+			u = self.minDistance(dist, sptSet)
+			sptSet[u] = True
+
+			for v in range(self.V):
+				if (self.graph[u][v] > 0 and
+				sptSet[v] == False and
+				dist[v] > dist[u] + self.graph[u][v]):
+					dist[v] = dist[u] + self.graph[u][v]
+
+		# self.printSolution(dist)
+
+# g = ShortestPathEstimation(numNodes)
+# g = ShortestPathEstimation(9)
+# g.graph = [[0, 4, 0, 0, 0, 0, 0, 8, 0], # based on the ping list
+# 		[4, 0, 8, 0, 0, 0, 0, 11, 0],
+# 		[0, 8, 0, 7, 0, 4, 0, 0, 2],
+# 		[0, 0, 7, 0, 9, 14, 0, 0, 0],
+# 		[0, 0, 0, 9, 0, 10, 0, 0, 0],
+# 		[0, 0, 4, 14, 10, 0, 2, 0, 0],
+# 		[0, 0, 0, 0, 0, 2, 0, 1, 6],
+# 		[8, 11, 0, 0, 0, 0, 1, 0, 7],
+# 		[0, 0, 2, 0, 0, 0, 6, 7, 0]
+# 		]
+
+# for s in range(Sources):
+#     g.dijkstra(s)
+# g.dijkstra(0)
 
 if __name__ == "__main__":
     

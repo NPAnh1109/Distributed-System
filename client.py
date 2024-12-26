@@ -175,7 +175,7 @@ class Client_dict:
         print(all_files)
         chunk_files = [file for file in all_files if file.startswith(f'{id}_')]
         for filename in chunk_files:
-            filepath = f"{dir}\{filename}"
+            filepath = f"{dir}/{filename}"
             # with open(filepath, 'rb') as fileobj:
             #     content = fileobj.readline()
             #     values = content.split()
@@ -253,6 +253,8 @@ class client:
         self.connection_list = []
         self.temp_connection_list = []
         self.cur_port = 40000
+        self.server_state = 0
+        self.lock = threading.Lock()
 
     def get_local_ip(self):
         try:
@@ -269,24 +271,24 @@ class client:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
                 s.connect(conection_info)
-                sum_round_trip_time = 0
-                for i in range(5):
-                    start_time = time.time()
-                    s.sendall("ping".encode('utf-8'))  # Send ping to another client
+                start_time = time.time()
+                data = ""
+                s.sendall("Ping".encode('utf-8'))  # Send ping to another client
+                while not data:
+                    s.settimeout(5)
                     data = s.recv(1024)  # Receive ping response
-                    if(i == 1):
-                        split_data = data.split("--")
-                        conection_info[1] = int(split_data[1])
-                    end_time = time.time()
-                    round_trip_time = (end_time - start_time) * 1000  # Round-trip time in ms
-                    sum_round_trip_time += round_trip_time
-                    print(f"Ping response: {data.decode('utf-8')}, Round-trip latency: {round_trip_time:.2f} ms")
-                    time.sleep(1)
+                print(data)
+                end_time = time.time()
+                round_trip_time = (end_time - start_time) * 1000  # Round-trip time in ms
+                sum_round_trip_time += round_trip_time
+                print(f"Ping response: {conection_info[0]}, Round-trip latency: {round_trip_time:.2f} ms")
+                self.weight[conection_info[0]] = round_trip_time
+                s.close()
+                return True
             except:
                 print(f"Can connect to {conection_info[0]}")
                 self.weight[conection_info[0]] = 10000000
-                return
-        self.weight[conection_info[0]] = sum_round_trip_time/5
+                return True
 
     def set_server_host(self, host):
         self.server_host = host
@@ -333,7 +335,7 @@ class client:
         sorted_file_names = sorted(correct_chunk_files, key=lambda x: int(x.split('_')[1].split(".")[0]))
         for file in sorted_file_names:
             print(f"sending file:{file}")
-            correct_path.append(self.chunk_path + "\\" + file)
+            correct_path.append(self.chunk_path + "/" + file)
         for i in range(int(start) - 1, len(correct_chunk_files)):
             filesize = os.path.getsize(correct_path[i])
             with open(correct_path[i], "rb") as f:
@@ -361,37 +363,50 @@ class client:
         return 1
 
 
-    def peer_handler(self, clientConnect, clientSocket):
+    def handle_peer(self, clientConnect, clientSocket):
         print(f'Prepare to serve {clientSocket}...')
         receive_message = clientConnect.recv(BYTES).decode("utf-8")
         print(receive_message)
         msg_splt = receive_message.split("--")
-        if(msg_splt[0] == "ping"):
-            print("ping successfully")
+        if(msg_splt[0] == "Ping"):
+            print("Ping successfully")
             send_data = f"[Announcement]--Ping Successfully--"
             clientConnect.send(send_data.encode("utf-8"))
-        if(msg_splt[0] == "Download"):
+        elif(msg_splt[0] == "Download"):
             send_data = f"Port--{self.cur_port}"
             self.cur_port += 1
-            s_file_client = threading.Thread(target=self.open_port_thread,
-                                                 args=(self.cur_port-1))
+            s_file_client = threading.Thread(target=self.open_port_thread, args=(self.cur_port-1,))
+            s_file_client.daemon = True
             s_file_client.start()
             clientConnect.send(send_data.encode("utf-8"))
+            clientConnect.close()
+        elif msg_splt[0] == "Update ping":
+            if(msg_splt[1] == "add"):
+                print(f"add new ip: {msg_splt[2]}")
+                self.connection_list.append(msg_splt[2])
+            elif(msg_splt[1] == "remove"):
+                print(f"remove new ip: {msg_splt[2]}")
+                self.remove(msg_splt[2])
+            else:
+                print("something wrong with update ping")
+        else:
+            print("Something wrong in handle ping")
+                    
+
 
     def open_port_thread(self, port):
         file_soket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        file_soket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        print(self.get_client_host())
+        file_soket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Allow port reuse
         try:
             file_soket.bind((self.get_client_host(), port))
-
+            print(f"Port {port} is binding")
         except:
-            print("Something went wrong")
+            print("Port {port} is binding. Something went wrong")
         file_soket.listen()
-        print(f"The file serving socket is {self.file_soket.getsockname()}")
         while True:
             try:
-                peer_client, peer_client_socket = self.file_soket.accept()
+                peer_client, peer_client_socket = file_soket.accept()
+                print(f"there are 1 connection in port{port}")
                 self.send_chunk_to_client(peer_client, peer_client_socket)
                 break
             except:
@@ -413,206 +428,176 @@ class client:
         while True:
             try:
                 peer_client, peer_client_socket = self.file_soket.accept()
-                s_file_client = threading.Thread(target=self.peer_handler,
+                #self.handle_peer.(peer_client, peer_client_socket)
+                s_file_client = threading.Thread(target=self.handle_peer,
                                                  args=(peer_client, peer_client_socket))
                 s_file_client.start()
             except:
                 pass
 
-    def handle_server(self):
-        self.client_socket.connect((self.get_server_host(), SERVER_PORT))
-
-        while True:
-            receive_message = self.client_socket.recv(BYTES).decode("utf-8")
-            msg_split = receive_message.split("--")
-            cmd = msg_split[1]
-            if "Welcome" in cmd:
-                self.client_socket.send(f'{LOCAL_PORT}'.encode("utf-8"))
-                print("welcome")
-                self.log.append(receive_message)
-
-            elif "Upload Successfully" in cmd:
-                if len(msg_split) == 3:
-                    uniqueID = int(msg_split[2])  # Get unique ID
-                    name = os.path.basename(self.upload_path)
-                    total_chunks = math.ceil(os.path.getsize(self.upload_path) / chunksize)
-                    general_dict.add_file(uniqueID, name, total_chunks)
-                    general_dict.split_chunks(uniqueID, self.upload_path, self.chunk_path)
-                    general_dict.create_JSON(uniqueID, self.download_path, self.chunk_path)
-                self.log.append(receive_message)
-                print(f"Upload successfully {uniqueID}")
-                break
-            elif "Update ping" in cmd:
-                action = 0 # 0-add, 1-remove
-                for msg in msg_split:
-                    if(msg == "add"):
-                        action = 0
-                    elif(msg == "sub"):
-                        action = 1
-                    else:
-                        if action == 0:
-                            self.connection_list.append(msg)
-                        else:
-                            self.remove(msg)
-
-            elif "Download Successfully" in cmd:
-                print(f"Receive: {receive_message}")
-
-                if len(msg_split) == 4:
-                    # Get information
-                    self.id = int(msg_split[2])
-                    peer_info = eval(msg_split[3])
-
-                    # Initialize message
-                    general_dict.add_file_from_JSON(self.json_path)
-                    general_dict.check_chunks(self.json_path)
-                    list_of_missing = (general_dict.missing_file(self.id))
-                    size = len(list_of_missing)
-                    chunkIdx = 1
-                    while size:
-                        # Random choose a client to connect
-                        # rand_int = random.randint(0, len(peer_info['ip']) - 1)
-                        chunkIdx = min(list_of_missing)
-                        rand_int = len(peer_info['ip'])-1
-                        miniServerIP = peer_info['ip'][rand_int]
-                        miniServerPort = peer_info['port'][rand_int]
-                        connect_tuple = (miniServerIP, miniServerPort)  # connect client
-                        # Pop connected client out of list
-                        print(f"{connect_tuple}")
-                        peer_info['ip'].remove(miniServerIP)
-                        peer_info['port'].remove(miniServerPort)
-                        new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        new_socket.connect(connect_tuple)
-                        new_socket.send(f"Download--{self.id}--{chunkIdx}".encode("utf-8"))  # Send uniqueID--chunkStart
-                        msg = new_socket.recv(BYTES).decode("utf-8")
-                        download_port = msg.split("--")[1]
-                        new_socket.close()
-
-                        download_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        download_socket.connect((connect_tuple[0], download_port))
-                        download_socket.send(f"Download--{self.id}--{chunkIdx}".encode("utf-8"))
-                        msg = new_socket.recv(BYTES).decode("utf-8")
-                        print(f"chunk id:{chunkIdx}")
-                        for i in range(chunkIdx - 1, int(size)):
-                            path = self.chunk_path + "\\" + f"{self.id}_{chunkIdx}.txt"
-                            text = new_socket.recv(2 * chunksize)
-                            print(f"self{self.json_path}")
-                            print(f"{chunkIdx}:{len(text)}")
-                            with open(self.json_path, 'r') as json_file:
-                                file_info = json.load(json_file)
-                                id = int(file_info.get("id"))
-                                sizeofchunk = int(file_info.get(f"{chunkIdx}"))
-                                
-                            try:
-                                if (len(text) == sizeofchunk):
-                                    with open(path, 'wb') as file:
-                                        file.write(text)
-                                    print(f"Text file '{path}' created successfully.")
-                                    self.log.append(f"Text file '{path}' created successfully.")
-                                    new_socket.send(f"OK".encode("utf-8"))
-                                    # time.sleep(0.1)
-                                    file.close()
-                                    chunkIdx += 1
-                                else:
-                                    print(f"sys size: {len(text)}, ex size: {int(sizeofchunk)}")
-                                    self.log.append(f"Fail--{chunkIdx}".encode("utf-8"))
-                                    new_socket.send(f"Fail--{chunkIdx}".encode("utf-8"))
-                                    i-=1
-
-                            except IOError as e:
-                                print(f"Error: {chunkIdx}")
-                                self.log.append(f"Error: {chunkIdx}")
-                                new_socket.send(f"Fail--{chunkIdx}".encode("utf-8"))
-
-
-                        with open(self.json_path, 'r') as json_file:
-                            file_info = json.load(json_file)
-                            total = int(file_info.get("total"))
-                        # Handle enough chunk => break
-                        if (chunkIdx - 1) == total:
-                            print("Success")
-                            self.status = 1
-                            print(f"chunk path 2: {self.chunk_path}")
-                            general_dict.add_chunks_from_dir(self.chunk_path, id)
-                            general_dict.merge_chunks(id, self.download_path)
-                            # Close connection
-                            new_socket.close()
-                            break
-
-                        if chunkIdx < total:
-                            if len(peer_info['ip']) == 0:
-                                # case : no peer has enough chunk
-                                print("Fail - No peer have enough chunk")
-                                self.log.append("Fail - No peer have enough chunk")
-                                # removing chunk files
-                                files = os.listdir(self.chunk_path)
-                                self.status = -1
-                                for file in files:
-                                    if file.startswith(f"{self.id}_"):
-                                        os.remove(os.path.join(self.chunk_path, file))
-                                # Close connection
-                                new_socket.close()
-                                break
-
-                    print("Finished")
-                    self.log.append("Finished")
-                    return
-                break
-
-                self.log.append(receive_message)
-
-            elif "Disconnect" in cmd:
-                self.log.append(receive_message)
-                break
-
-            elif "Waiting" in cmd:
-                self.log.append(receive_message)
-                break
-
-            else:
-                self.log.append(receive_message)
-                print("Something went wrong")
-                break
-
-            time.sleep(0.1)
-
-            client_cmd = self.get_message()
-
-            if client_cmd == " ":
-                pass
-
+    def handle_server(self, message):
+        with self.lock:
+            self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.client_socket.connect((self.get_server_host(), SERVER_PORT))
+            client_cmd = message
+            print(f"Cmd send: {client_cmd}")
+            receive_message = " "
+            #send cmd to server
             cmd_split = client_cmd.split(" ")
             cmd = cmd_split[0]
-
             if cmd == "Upload":
-                send_data = f"Upload"
-                self.client_socket.send(send_data.encode("utf-8"))
-                self.set_message(" ")
-
+                self.client_socket.send(client_cmd.encode("utf-8"))
             elif cmd == "Download" and (len(cmd_split) == 2):
                 self.client_socket.send(client_cmd.encode("utf-8"))
-                self.set_message(" ")
-
             elif cmd == "Disconnect":
-                self.client_socket.send(cmd.encode("utf-8"))
-
-            elif cmd == "Waiting":
-                self.client_socket.send(cmd.encode("utf-8"))
-                self.set_message(" ")
-
+                self.client_socket.send(client_cmd.encode("utf-8"))
+                return
+            elif cmd == "Welcome":
+                self.client_socket.send(client_cmd.encode("utf-8"))
+            elif cmd == "Update":
+                self.client_socket.send(client_cmd.encode("utf-8"))
             else:
                 print("Something's wrong")
-                self.set_message(" ")
-
+                return
+            self.set_message(" ")
+            #receive rep from server
+            while(receive_message == " "):
+                receive_message = self.client_socket.recv(BYTES).decode("utf-8")
+            print(receive_message)
+            msg_split = receive_message.split("--")
+            cmd = msg_split[1]
+            self.client_socket.close()
         self.log.append("[Announcement] Disconnect from the server !")
-        self.client_socket.close()
+        #process receive data
+        if "Upload Successfully" in cmd:
+            if len(msg_split) == 3:
+                uniqueID = int(msg_split[2])  # Get unique ID
+                name = os.path.basename(self.upload_path)
+                total_chunks = math.ceil(os.path.getsize(self.upload_path) / chunksize)
+                general_dict.add_file(uniqueID, name, total_chunks)
+                general_dict.split_chunks(uniqueID, self.upload_path, self.chunk_path)
+                general_dict.create_JSON(uniqueID, self.download_path, self.chunk_path)
+            self.log.append(receive_message)
+            print(f"Upload successfully {uniqueID}")
+        elif "Download Successfully" in cmd:
+            print(f"Receive: {receive_message}")
+            if len(msg_split) == 4:
+                # Get information
+                self.id = int(msg_split[2])
+                peer_info = eval(msg_split[3])
+                # Initialize message
+                general_dict.add_file_from_JSON(self.json_path)
+                general_dict.check_chunks(self.json_path)
+                list_of_missing = (general_dict.missing_file(self.id))
+                size = len(list_of_missing)
+                chunkIdx = 1
+                print(f"size: {size}")
+                while size:
+                    # Random choose a client to connect
+                    chunkIdx = min(list_of_missing)
+                    rand_int = len(peer_info['ip'])-1
+                    miniServerIP = peer_info['ip'][rand_int]
+                    miniServerPort = peer_info['port'][rand_int]
+                    connect_tuple = (miniServerIP, miniServerPort)  # connect client
+                    # Pop connected client out of list
+                    print(f"{connect_tuple}")
+                    peer_info['ip'].remove(miniServerIP)
+                    peer_info['port'].remove(miniServerPort)
+                    new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    new_socket.connect(connect_tuple)
+                    new_socket.send(f"Download--{self.id}--{chunkIdx}".encode("utf-8"))  # Send uniqueID--chunkStart
+                    msg = new_socket.recv(BYTES).decode("utf-8")
+                    print(f"message after download: {msg}")
+                    download_port = int(msg.split("--")[1])
+                    new_socket.close()
+
+                    download_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    time.sleep(1)
+                    download_socket.connect((connect_tuple[0], download_port))
+                    download_socket.send(f"Download--{self.id}--{chunkIdx}".encode("utf-8"))
+                    msg = download_socket.recv(BYTES).decode("utf-8")
+                    print(f"chunk id:{chunkIdx}")
+                    for i in range(chunkIdx - 1, int(size)):
+                        path = self.chunk_path + "/" + f"{self.id}_{chunkIdx}.txt"
+                        print(f"chunk path: {path}")
+                        text = download_socket.recv(2 * chunksize)
+                        print(f"self{self.json_path}")
+                        print(f"{chunkIdx}:{len(text)}")
+                        with open(self.json_path, 'r') as json_file:
+                            file_info = json.load(json_file)
+                            id = int(file_info.get("id"))
+                            sizeofchunk = int(file_info.get(f"{chunkIdx}"))
+                            print(f"sizeofchunk: {sizeofchunk}")
+                        try:
+                            if (len(text) == sizeofchunk):
+                                with open(path, 'wb') as file:
+                                    file.write(text)
+                                print(f"Text file '{path}' created successfully.")
+                                self.log.append(f"Text file '{path}' created successfully.")
+                                download_socket.send(f"OK".encode("utf-8"))
+                                # time.sleep(0.1)
+                                file.close()
+                                chunkIdx += 1
+                            else:
+                                print(f"sys size: {len(text)}, ex size: {int(sizeofchunk)}")
+                                self.log.append(f"Fail--{chunkIdx}".encode("utf-8"))
+                                new_socket.send(f"Fail--{chunkIdx}".encode("utf-8"))
+                                i-=1
+
+                        except IOError as e:
+                            print(f"Error: {chunkIdx}")
+                            self.log.append(f"Error: {chunkIdx}")
+                            download_socket.send(f"Fail--{chunkIdx}".encode("utf-8"))
+
+
+                    with open(self.json_path, 'r') as json_file:
+                        file_info = json.load(json_file)
+                        total = int(file_info.get("total"))
+                    # Handle enough chunk => break
+                    if (chunkIdx - 1) == total:
+                        print("Success")
+                        self.status = 1
+                        print(f"chunk path 2: {self.chunk_path}")
+                        general_dict.add_chunks_from_dir(self.chunk_path, id)
+                        general_dict.merge_chunks(id, self.download_path)
+                        # Close connection
+                        download_socket.close()
+                        break
+
+                    if chunkIdx < total:
+                        if len(peer_info['ip']) == 0:
+                            # case : no peer has enough chunk
+                            print("Fail - No peer have enough chunk")
+                            self.log.append("Fail - No peer have enough chunk")
+                            # removing chunk files
+                            files = os.listdir(self.chunk_path)
+                            self.status = -1
+                            for file in files:
+                                if file.startswith(f"{self.id}_"):
+                                    os.remove(os.path.join(self.chunk_path, file))
+                            # Close connection
+                            download_socket.close()
+                            break
+
+                print("Finished")
+                self.log.append("Finished")
+                return
+
+            self.log.append(receive_message)
+
+        elif "Disconnect" in cmd:
+            self.log.append(receive_message)
+
+        else:
+            self.log.append(receive_message)
+            print("Something went wrong")
 
     def ping_message_to_server(self):
-        message = "Update "
-        for ip in self.client.weight.keys():
+        message = "Update"
+        for ip in self.weight.keys():
             message += f" {ip}--{self.weight[ip]}"
         try:
-            self.client.sending_messsage_to_server(message)
+            self.sending_messsage_to_server(message)
             print("Updating information...")
             self.weight.clear()
         except Exception as e:
@@ -620,29 +605,32 @@ class client:
 
     def handle_ping(self):
         while True:
-            size = len(self.connection_list)
-            if(size == 0):
-                self.temp_connection_list = self.connection_list 
-            for idx in range(math.sqrt(size)):
-                self.ping_client((self.temp_connection_list[0], LOCAL_PORT))
+            if(len(self.connection_list) == 0):
+                time.sleep(2)
+                print("Pause")
+                continue
+            
+            size = len(self.temp_connection_list)
+            for idx in range(int(math.sqrt(size))):
+                while(not self.ping_client((self.temp_connection_list[0], LOCAL_PORT))):
+                    done_flag = True
                 self.temp_connection_list.pop(0)
             self.ping_message_to_server()
-
-    def stop_connect_to_server(self):
-        self.client_socket.close()
+            time.sleep(6)
 
     def start_client(self):
         t2 = threading.Thread(target=self.open_file_serving_socket)
+        t2.daemon = True
         t2.start()
+        t3 = threading.Thread(target=self.handle_ping)
+        t3.daemon = True
+        t3.start()
         return
 
     def sending_messsage_to_server(self, message):
-        t1 = threading.Thread(target=self.handle_server)
+        t1 = threading.Thread(target=self.handle_server(message))
         t1.start()
-        self.set_message(message)
         t1.join()
-        self.stop_connect_to_server()
-
 
 new_client = client()
 class ClientApp(tk.Tk):
@@ -651,7 +639,7 @@ class ClientApp(tk.Tk):
         self.title("File Sharing Client")
         self.geometry("480x480")
         self.client = client()
-
+        self.client.start_client()
         self.setup_ui()
 
     def setup_ui(self):
@@ -754,9 +742,10 @@ class ClientApp(tk.Tk):
         chunk_directory = self.chunk_directory_entry.get()
 
         self.client.set_server_host(server_ip)
-        self.client.start_client()
         self.client.is_connected = True  # Set connection flag to True after successful connection
+        self.client.sending_messsage_to_server("Welcome")
         print("Connection to server initiated.")
+        
 
     def upload_file(self):
         filename = self.up_directory_entry.get()
@@ -765,45 +754,30 @@ class ClientApp(tk.Tk):
             return
 
         if filename:
-            try:
-                self.client.sending_messsage_to_server("Upload")
-                print(f"Prepared {filename} for upload.")
+            # try:
+            self.client.sending_messsage_to_server("Upload")
+            print(f"Prepared {filename} for upload.")
 
-            except Exception as e:
-                print(f"Failed to prepare the file for upload: {e}")
-                messagebox.showerror("Upload Failed", f"Could not prepare the file for upload: {e}")
+            # except Exception as e:
+            #     print(f"Failed to prepare the file for upload: {e}")
+            #     messagebox.showerror("Upload Failed", f"Could not prepare the file for upload: {e}")
 
     def download_file(self):
         if not self.client.is_connected:
             messagebox.showwarning("Connection Required", "Please connect to the server first.")
             return
-        try:
-            with open(self.client.json_path, 'r') as json_file:
-                file_info = json.load(json_file)
-                id = int(file_info.get("id"))
-            self.client.sending_messsage_to_server(f"Download {id}")
-            print("Downloading file...")
+        #try:
+        with open(self.client.json_path, 'r') as json_file:
+            file_info = json.load(json_file)
+            id = int(file_info.get("id"))
+        self.client.sending_messsage_to_server(f"Download {id}")
+        print("Downloading file...")
 
-        except Exception as e:
-            print(f"Failed to prepare the file for upload: {e}")
-            messagebox.showerror("Upload Failed", f"Could not prepare the file for upload: {e}")
-
-    
+        #except Exception as e:
+        #    print(f"Failed to prepare the file for upload: {e}")
+        #    messagebox.showerror("Upload Failed", f"Could not prepare the file for upload: {e}")
 
 
 if __name__ == '__main__':
     app = ClientApp()
     app.mainloop()
-    # new_client.set_client_download_path(r"D:\232_semester\CN\New folder\testing_data\ouptut")
-    # new_client.set_client_upload_path(r"D:\232_semester\CN\New folder\testing_data\Upload\Horus.pdf")
-    # new_client.chunk_path = r"D:\232_semester\CN\New folder\testing_data\chunks"
-    # new_client.json_path = r"D:\232_semester\CN\New folder\testing_data\Upload\Horus.pdf.json"
-    # new_client.set_server_host("192.168.0.105")
-    
-    # with open(new_client.json_path, 'r') as json_file:
-    #         file_info = json.load(json_file)
-    #         id = int(file_info.get("id"))
-    #         print(id)
-    # new_client.start_client()
-    # new_client.sending_messsage_to_server(f"Download {id}")
-    # print("Done")
